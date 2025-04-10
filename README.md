@@ -61,6 +61,7 @@ pip install -r requirements.txt
 Set up the database and create necessary tables:
 
 ```bash
+cd travel-recommendation
 python manage.py makemigrations
 python manage.py migrate
 ```
