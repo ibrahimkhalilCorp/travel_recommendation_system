@@ -12,7 +12,8 @@ from asyncio import Semaphore
 logger = logging.getLogger(__name__)
 
 METRICS_CACHE_KEY = 'district_metrics'
-MAX_CONCURRENT_REQUESTS = 2 
+MAX_CONCURRENT_REQUESTS = 5  # Limit concurrent API calls to avoid 429 errors
+
 
 def fetch_districts_data():
     json_path = os.path.join(settings.BASE_DIR, 'data', 'bd-districts.json')
@@ -32,6 +33,7 @@ def fetch_districts_data():
     except Exception as e:
         logger.error(f"Error loading districts data: {e}")
         return []
+
 
 async def fetch_weather_data(session, latitude, longitude, semaphore):
     cache_key = f"weather_{latitude}_{longitude}"
@@ -69,6 +71,7 @@ async def fetch_weather_data(session, latitude, longitude, semaphore):
                 logger.error(f"Failed to fetch weather data for {latitude}, {longitude}: {e}")
                 return None
     return None
+
 
 async def fetch_air_quality_data(session, latitude, longitude, semaphore):
     cache_key = f"air_quality_{latitude}_{longitude}"
@@ -110,6 +113,7 @@ async def fetch_air_quality_data(session, latitude, longitude, semaphore):
                 return None
     return None
 
+
 def get_avg_temperature_at_2pm(data):
     if not data or 'hourly' not in data or 'temperature_2m' not in data['hourly']:
         return 35.0
@@ -117,12 +121,14 @@ def get_avg_temperature_at_2pm(data):
                     if time.endswith("14:00") and temp is not None]
     return sum(temperatures) / len(temperatures) if temperatures else 35.0
 
+
 def get_avg_pm25_at_2pm(data):
     if not data or 'hourly' not in data or 'pm2_5' not in data['hourly']:
         return 50.0
     pm25_values = [pm25 for time, pm25 in zip(data['hourly']['time'], data['hourly']['pm2_5'])
                    if time.endswith("14:00") and pm25 is not None]
     return sum(pm25_values) / len(pm25_values) if pm25_values else 50.0
+
 
 def get_temperature_at_2pm(data, travel_date):
     if not data or 'hourly' not in data or 'temperature_2m' not in data['hourly']:
@@ -135,6 +141,7 @@ def get_temperature_at_2pm(data, travel_date):
     temp = data['hourly']['temperature_2m'][index]
     return temp if temp is not None else None
 
+
 def get_pm25_at_2pm(data, travel_date):
     if not data or 'hourly' not in data or 'pm2_5' not in data['hourly']:
         return 50.0
@@ -145,6 +152,7 @@ def get_pm25_at_2pm(data, travel_date):
     index = data['hourly']['time'].index(target_time)
     pm25 = data['hourly']['pm2_5'][index]
     return pm25 if pm25 is not None else 50.0
+
 
 async def fetch_district_metrics(session, district, semaphore):
     weather_data = await fetch_weather_data(session, district['latitude'], district['longitude'], semaphore)
@@ -159,6 +167,7 @@ async def fetch_district_metrics(session, district, semaphore):
         'avg_pm25': round(avg_pm25, 2)
     }
 
+
 async def fetch_travel_data(session, district, travel_date, semaphore):
     weather_data = await fetch_weather_data(session, district['latitude'], district['longitude'], semaphore)
     air_quality_data = await fetch_air_quality_data(session, district['latitude'], district['longitude'], semaphore)
@@ -169,11 +178,13 @@ async def fetch_travel_data(session, district, travel_date, semaphore):
         'pm25': pm25 if pm25 is not None else 50.0
     }
 
+
 async def fetch_all_district_metrics(districts):
     semaphore = Semaphore(MAX_CONCURRENT_REQUESTS)
     async with aiohttp.ClientSession() as session:
         tasks = [fetch_district_metrics(session, district, semaphore) for district in districts]
         return await asyncio.gather(*tasks)
+
 
 async def fetch_travel_metrics(current_district, destination_district, travel_date):
     semaphore = Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -184,25 +195,28 @@ async def fetch_travel_metrics(current_district, destination_district, travel_da
         ]
         return await asyncio.gather(*tasks)
 
+
 def run_async_fetch_districts(districts):
     return asyncio.run(fetch_all_district_metrics(districts))
 
+
 def run_async_fetch_travel(current_district, destination_district, travel_date):
     return asyncio.run(fetch_travel_metrics(current_district, destination_district, travel_date))
+
 
 def get_district_metrics():
     cached_metrics = cache.get(METRICS_CACHE_KEY)
     if cached_metrics:
         logger.info("Returning cached district metrics")
         return cached_metrics
-    
+
     districts = fetch_districts_data()
     if not districts:
         return []
-    
+
     with ThreadPoolExecutor(max_workers=5) as executor:
         metrics = executor.submit(run_async_fetch_districts, districts).result()
-    
+
     cache.set(METRICS_CACHE_KEY, metrics, timeout=86400)
     logger.info("Precomputed metrics stored in cache")
     return metrics

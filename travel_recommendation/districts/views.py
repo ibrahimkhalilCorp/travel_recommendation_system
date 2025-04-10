@@ -16,6 +16,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
+
 class IndexView(View):
     def get(self, request):
         districts = District.objects.all().order_by('name')
@@ -45,7 +46,7 @@ class IndexView(View):
                     'error': f"Error loading districts: {str(e)}"
                 }
                 return render(request, 'index.html', context)
-        
+
         context = {
             'districts': districts,
             'today': datetime.now(),
@@ -53,10 +54,11 @@ class IndexView(View):
         }
         return render(request, 'index.html', context)
 
+
 class TopDistrictsView(APIView):
     def get(self, request):
         start_time = time.time()
-        
+
         # Fetch precomputed or cached metrics
         district_data = get_district_metrics()
 
@@ -74,6 +76,7 @@ class TopDistrictsView(APIView):
             logger.warning(f"Response time exceeded 500 ms: {elapsed_time:.2f} ms")
 
         return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class TravelRecommendationView(View):
     def get(self, request):
@@ -104,7 +107,7 @@ class TravelRecommendationView(View):
                     'error': f"Error loading districts: {str(e)}"
                 }
                 return render(request, 'index.html', context)
-        
+
         context = {
             'districts': districts,
             'today': datetime.now(),
@@ -138,8 +141,10 @@ class TravelRecommendationView(View):
 
             # Fetch weather and air quality data asynchronously
             current_district_data = {'latitude': current_district.latitude, 'longitude': current_district.longitude}
-            destination_district_data = {'latitude': destination_district.latitude, 'longitude': destination_district.longitude}
-            current_data, dest_data = run_async_fetch_travel(current_district_data, destination_district_data, travel_date)
+            destination_district_data = {'latitude': destination_district.latitude,
+                                         'longitude': destination_district.longitude}
+            current_data, dest_data = run_async_fetch_travel(current_district_data, destination_district_data,
+                                                             travel_date)
 
             current_temp = current_data['temp']
             current_pm25 = current_data['pm25']
@@ -158,7 +163,8 @@ class TravelRecommendationView(View):
                 if temp_diff <= 0:
                     reasons.append(f"hotter by {abs(temp_diff):.1f}°C" if temp_diff < 0 else "same temperature")
                 if pm25_diff <= 0:
-                    reasons.append(f"worse air quality by {abs(pm25_diff):.1f} µg/m³" if pm25_diff < 0 else "same air quality")
+                    reasons.append(
+                        f"worse air quality by {abs(pm25_diff):.1f} µg/m³" if pm25_diff < 0 else "same air quality")
                 reason = f"Your destination is {' and '.join(reasons)} than your current district. It’s better to stay where you are."
 
             response_data = {
