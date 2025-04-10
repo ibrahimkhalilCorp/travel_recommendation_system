@@ -1,199 +1,208 @@
-from django.views.generic import View
-from django.shortcuts import render
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from .models import District
-from .serializers import TopDistrictSerializer, TravelRecommendationSerializer
-from .services import (
-    fetch_districts_data,
-    get_district_metrics,
-    run_async_fetch_travel
-)
-from datetime import datetime, timedelta
+import aiohttp
+import asyncio
+from django.core.cache import cache
+import json
+import os
+from django.conf import settings
 import logging
-import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from asyncio import Semaphore
 
 logger = logging.getLogger(__name__)
 
-class IndexView(View):
-    def get(self, request):
-        districts = District.objects.all().order_by('name')
-        if not districts.exists():
-            try:
-                districts_data = fetch_districts_data()
-                if not districts_data:
-                    context = {
-                        'districts': [],
-                        'today': datetime.now(),
-                        'seven_days_later': datetime.now() + timedelta(days=7),
-                        'error': "No district data available"
-                    }
-                    return render(request, 'index.html', context)
-                for district_data in districts_data:
-                    District.objects.get_or_create(
-                        name=district_data['name'],
-                        latitude=district_data['latitude'],
-                        longitude=district_data['longitude']
-                    )
-                districts = District.objects.all().order_by('name')
-            except Exception as e:
-                context = {
-                    'districts': [],
-                    'today': datetime.now(),
-                    'seven_days_later': datetime.now() + timedelta(days=7),
-                    'error': f"Error loading districts: {str(e)}"
-                }
-                return render(request, 'index.html', context)
-        
-        context = {
-            'districts': districts,
-            'today': datetime.now(),
-            'seven_days_later': datetime.now() + timedelta(days=7)
-        }
-        return render(request, 'index.html', context)
+METRICS_CACHE_KEY = 'district_metrics'
+MAX_CONCURRENT_REQUESTS = 2 
 
-class TopDistrictsView(APIView):
-    def get(self, request):
-        start_time = time.time()
-        
-        # Fetch precomputed or cached metrics
-        district_data = get_district_metrics()
-
-        if not district_data:
-            return Response({"error": "No data available"}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        # Sort by temperature and PM2.5, take top 10
-        district_data.sort(key=lambda x: (x['avg_temperature'], x['avg_pm25']))
-        top_districts = district_data[:10]
-        serializer = TopDistrictSerializer(top_districts, many=True)
-
-        elapsed_time = (time.time() - start_time) * 1000
-        logger.info(f"Top districts processed in {elapsed_time:.2f} ms")
-        if elapsed_time > 500:
-            logger.warning(f"Response time exceeded 500 ms: {elapsed_time:.2f} ms")
-
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-class TravelRecommendationView(View):
-    def get(self, request):
-        districts = District.objects.all().order_by('name')
-        if not districts.exists():
-            try:
-                districts_data = fetch_districts_data()
-                if not districts_data:
-                    context = {
-                        'districts': [],
-                        'today': datetime.now(),
-                        'seven_days_later': datetime.now() + timedelta(days=7),
-                        'error': "No district data available"
-                    }
-                    return render(request, 'index.html', context)
-                for district_data in districts_data:
-                    District.objects.get_or_create(
-                        name=district_data['name'],
-                        latitude=district_data['latitude'],
-                        longitude=district_data['longitude']
-                    )
-                districts = District.objects.all().order_by('name')
-            except Exception as e:
-                context = {
-                    'districts': [],
-                    'today': datetime.now(),
-                    'seven_days_later': datetime.now() + timedelta(days=7),
-                    'error': f"Error loading districts: {str(e)}"
-                }
-                return render(request, 'index.html', context)
-        
-        context = {
-            'districts': districts,
-            'today': datetime.now(),
-            'seven_days_later': datetime.now() + timedelta(days=7)
-        }
-        return render(request, 'index.html', context)
-
-    def post(self, request):
-        start_time = time.time()
-        districts = District.objects.all().order_by('name')
-        context = {
-            'districts': districts,
-            'today': datetime.now(),
-            'seven_days_later': datetime.now() + timedelta(days=7)
-        }
-
-        try:
-            current_district_name = request.POST.get('current_district')
-            destination_district_name = request.POST.get('destination_district')
-            travel_date_str = request.POST.get('travel_date')
-
-            if not all([current_district_name, destination_district_name, travel_date_str]):
-                raise ValueError("All fields (current district, destination district, travel date) are required")
-
-            current_district = District.objects.get(name=current_district_name)
-            destination_district = District.objects.get(name=destination_district_name)
-            travel_date = datetime.strptime(travel_date_str, '%Y-%m-%d').date()
-            today = datetime.now().date()
-            if travel_date < today or travel_date > (today + timedelta(days=7)):
-                raise ValueError("Travel date must be within the next 7 days from today")
-
-            # Fetch weather and air quality data asynchronously
-            current_district_data = {'latitude': current_district.latitude, 'longitude': current_district.longitude}
-            destination_district_data = {'latitude': destination_district.latitude, 'longitude': destination_district.longitude}
-            current_data, dest_data = run_async_fetch_travel(current_district_data, destination_district_data, travel_date)
-
-            current_temp = current_data['temp']
-            current_pm25 = current_data['pm25']
-            dest_temp = dest_data['temp']
-            dest_pm25 = dest_data['pm25']
-
-            # Generate recommendation
-            temp_diff = current_temp - dest_temp
-            pm25_diff = current_pm25 - dest_pm25
-            if temp_diff > 0 and pm25_diff > 0:
-                recommendation = "Recommended"
-                reason = f"Your destination is {temp_diff:.1f}°C cooler and has {pm25_diff:.1f} µg/m³ better air quality. Enjoy your trip!"
-            else:
-                recommendation = "Not Recommended"
-                reasons = []
-                if temp_diff <= 0:
-                    reasons.append(f"hotter by {abs(temp_diff):.1f}°C" if temp_diff < 0 else "same temperature")
-                if pm25_diff <= 0:
-                    reasons.append(f"worse air quality by {abs(pm25_diff):.1f} µg/m³" if pm25_diff < 0 else "same air quality")
-                reason = f"Your destination is {' and '.join(reasons)} than your current district. It’s better to stay where you are."
-
-            response_data = {
-                'recommendation': recommendation,
-                'reason': reason,
-                'current': {'temp': current_temp, 'pm25': current_pm25},
-                'destination': {'temp': dest_temp, 'pm25': dest_pm25}
+def fetch_districts_data():
+    json_path = os.path.join(settings.BASE_DIR, 'data', 'bd-districts.json')
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        districts = [
+            {
+                'name': district['name'],
+                'latitude': float(district['lat']),
+                'longitude': float(district['long'])
             }
+            for district in data.get('districts', [])
+        ]
+        logger.info(f"Loaded {len(districts)} districts from JSON")
+        return districts
+    except Exception as e:
+        logger.error(f"Error loading districts data: {e}")
+        return []
 
-            elapsed_time = (time.time() - start_time) * 1000
-            logger.info(f"Travel recommendation processed in {elapsed_time:.2f} ms")
-            if elapsed_time > 500:
-                logger.warning(f"Response time exceeded 500 ms: {elapsed_time:.2f} ms")
+async def fetch_weather_data(session, latitude, longitude, semaphore):
+    cache_key = f"weather_{latitude}_{longitude}"
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        logger.debug(f"Returning cached weather data for {latitude}, {longitude}")
+        return cached_data
 
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                context['recommendation'] = response_data
-                return render(request, 'index.html', context)
-            return Response(response_data, status=status.HTTP_200_OK)
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "hourly": "temperature_2m",
+        "timezone": "Asia/Dhaka",
+        "forecast_days": 7
+    }
+    retries = 3
+    for attempt in range(retries):
+        async with semaphore:  # Limit concurrent requests
+            try:
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    cache.set(cache_key, data, timeout=86400)  # Cache for 24 hours
+                    return data
+            except aiohttp.ClientResponseError as e:
+                if e.status == 429 and attempt < retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(f"429 error for {latitude}, {longitude}, retrying in {wait_time}s")
+                    await asyncio.sleep(wait_time)
+                    continue
+                logger.error(f"Failed to fetch weather data for {latitude}, {longitude}: {e}")
+                return None
+            except Exception as e:
+                logger.error(f"Failed to fetch weather data for {latitude}, {longitude}: {e}")
+                return None
+    return None
 
-        except District.DoesNotExist:
-            error_msg = "One or both selected districts are invalid"
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                context['error'] = error_msg
-                return render(request, 'index.html', context)
-            return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
-        except ValueError as e:
-            error_msg = str(e)
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                context['error'] = error_msg
-                return render(request, 'index.html', context)
-            return Response({"error": error_msg}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            logger.error(f"Error in travel recommendation: {str(e)}")
-            error_msg = "An unexpected error occurred"
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                context['error'] = error_msg
-                return render(request, 'index.html', context)
-            return Response({"error": error_msg}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+async def fetch_air_quality_data(session, latitude, longitude, semaphore):
+    cache_key = f"air_quality_{latitude}_{longitude}"
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        logger.debug(f"Returning cached air quality data for {latitude}, {longitude}")
+        return cached_data
+
+    url = "https://air-quality-api.open-meteo.com/v1/air-quality"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "hourly": "pm2_5",
+        "timezone": "Asia/Dhaka",
+        "forecast_days": 7
+    }
+    retries = 3
+    for attempt in range(retries):
+        async with semaphore:
+            try:
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    if 'hourly' not in data or 'pm2_5' not in data['hourly']:
+                        logger.warning(f"No valid PM2.5 data for {latitude}, {longitude}")
+                        return None
+                    cache.set(cache_key, data, timeout=86400)
+                    return data
+            except aiohttp.ClientResponseError as e:
+                if e.status == 429 and attempt < retries - 1:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"429 error for {latitude}, {longitude}, retrying in {wait_time}s")
+                    await asyncio.sleep(wait_time)
+                    continue
+                logger.error(f"Failed to fetch air quality data for {latitude}, {longitude}: {e}")
+                return None
+            except Exception as e:
+                logger.error(f"Failed to fetch air quality data for {latitude}, {longitude}: {e}")
+                return None
+    return None
+
+def get_avg_temperature_at_2pm(data):
+    if not data or 'hourly' not in data or 'temperature_2m' not in data['hourly']:
+        return 35.0
+    temperatures = [temp for time, temp in zip(data['hourly']['time'], data['hourly']['temperature_2m'])
+                    if time.endswith("14:00") and temp is not None]
+    return sum(temperatures) / len(temperatures) if temperatures else 35.0
+
+def get_avg_pm25_at_2pm(data):
+    if not data or 'hourly' not in data or 'pm2_5' not in data['hourly']:
+        return 50.0
+    pm25_values = [pm25 for time, pm25 in zip(data['hourly']['time'], data['hourly']['pm2_5'])
+                   if time.endswith("14:00") and pm25 is not None]
+    return sum(pm25_values) / len(pm25_values) if pm25_values else 50.0
+
+def get_temperature_at_2pm(data, travel_date):
+    if not data or 'hourly' not in data or 'temperature_2m' not in data['hourly']:
+        return None
+    target_date = travel_date.strftime("%Y-%m-%d")
+    target_time = f"{target_date}T14:00"
+    if target_time not in data['hourly']['time']:
+        return None
+    index = data['hourly']['time'].index(target_time)
+    temp = data['hourly']['temperature_2m'][index]
+    return temp if temp is not None else None
+
+def get_pm25_at_2pm(data, travel_date):
+    if not data or 'hourly' not in data or 'pm2_5' not in data['hourly']:
+        return 50.0
+    target_date = travel_date.strftime("%Y-%m-%d")
+    target_time = f"{target_date}T14:00"
+    if target_time not in data['hourly']['time']:
+        return 50.0
+    index = data['hourly']['time'].index(target_time)
+    pm25 = data['hourly']['pm2_5'][index]
+    return pm25 if pm25 is not None else 50.0
+
+async def fetch_district_metrics(session, district, semaphore):
+    weather_data = await fetch_weather_data(session, district['latitude'], district['longitude'], semaphore)
+    air_quality_data = await fetch_air_quality_data(session, district['latitude'], district['longitude'], semaphore)
+    avg_temp = get_avg_temperature_at_2pm(weather_data)
+    avg_pm25 = get_avg_pm25_at_2pm(air_quality_data)
+    return {
+        'name': district['name'],
+        'latitude': district['latitude'],
+        'longitude': district['longitude'],
+        'avg_temperature': round(avg_temp, 2),
+        'avg_pm25': round(avg_pm25, 2)
+    }
+
+async def fetch_travel_data(session, district, travel_date, semaphore):
+    weather_data = await fetch_weather_data(session, district['latitude'], district['longitude'], semaphore)
+    air_quality_data = await fetch_air_quality_data(session, district['latitude'], district['longitude'], semaphore)
+    temp = get_temperature_at_2pm(weather_data, travel_date)
+    pm25 = get_pm25_at_2pm(air_quality_data, travel_date)
+    return {
+        'temp': temp if temp is not None else 35.0,
+        'pm25': pm25 if pm25 is not None else 50.0
+    }
+
+async def fetch_all_district_metrics(districts):
+    semaphore = Semaphore(MAX_CONCURRENT_REQUESTS)
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_district_metrics(session, district, semaphore) for district in districts]
+        return await asyncio.gather(*tasks)
+
+async def fetch_travel_metrics(current_district, destination_district, travel_date):
+    semaphore = Semaphore(MAX_CONCURRENT_REQUESTS)
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            fetch_travel_data(session, current_district, travel_date, semaphore),
+            fetch_travel_data(session, destination_district, travel_date, semaphore)
+        ]
+        return await asyncio.gather(*tasks)
+
+def run_async_fetch_districts(districts):
+    return asyncio.run(fetch_all_district_metrics(districts))
+
+def run_async_fetch_travel(current_district, destination_district, travel_date):
+    return asyncio.run(fetch_travel_metrics(current_district, destination_district, travel_date))
+
+def get_district_metrics():
+    cached_metrics = cache.get(METRICS_CACHE_KEY)
+    if cached_metrics:
+        logger.info("Returning cached district metrics")
+        return cached_metrics
+    
+    districts = fetch_districts_data()
+    if not districts:
+        return []
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        metrics = executor.submit(run_async_fetch_districts, districts).result()
+    
+    cache.set(METRICS_CACHE_KEY, metrics, timeout=86400)
+    logger.info("Precomputed metrics stored in cache")
+    return metrics
