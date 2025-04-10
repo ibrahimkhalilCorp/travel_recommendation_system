@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Travel Recommendation System</title>
+    {% load static %}
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            background: linear-gradient(135deg, #74ebd5, #acb6e5);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            width: 100%;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            color: #34495e;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .tabs {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: #f1f3f5;
+            color: #34495e;
+            font-weight: 500;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            transition: background 0.3s ease, color 0.3s ease;
+            margin: 0 5px;
+        }
+
+        .tab.active {
+            background: #74ebd5;
+            color: white;
+        }
+
+        .tab:hover:not(.active) {
+            background: #e9ecef;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-container {
+            margin-top: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            font-size: 1rem;
+            color: #34495e;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        select, input[type="date"] {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 1rem;
+            color: #333;
+            background-color: #f9f9f9;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        select:focus, input[type="date"]:focus {
+            outline: none;
+            border-color: #74ebd5;
+            box-shadow: 0 0 5px rgba(116, 235, 213, 0.3);
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(90deg, #74ebd5, #acb6e5);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.1s ease, box-shadow 0.3s ease;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .recommendation, .error {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 10px;
+            background: #f8f9fa;
+            box-shadow: 0 5px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .recommendation h2, .error h2 {
+            text-align: left;
+            color: #2c3e50;
+        }
+
+        .recommendation p, .error p {
+            font-size: 1rem;
+            color: #555;
+            line-height: 1.6;
+        }
+
+        .recommendation .highlight.recommended {
+            font-weight: 600;
+            color: #2ecc71;
+        }
+
+        .recommendation .highlight.not-recommended {
+            font-weight: 600;
+            color: #e74c3c;
+        }
+
+        .error {
+            background: #ffe6e6;
+            border-left: 5px solid #e74c3c;
+        }
+
+        .top-districts {
+            margin-top: 20px;
+            padding: 20px;
+            border-radius: 10px;
+            background: #f8f9fa;
+            box-shadow: 0 5px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .top-districts table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        .top-districts th, .top-districts td {
+            padding: 12px;
+            text-align: left;
+            font-size: 0.9rem;
+            color: #555;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .top-districts th {
+            background: #74ebd5;
+            color: #2c3e50;
+            font-weight: 600;
+        }
+
+        .top-districts tr:hover {
+            background: #e9ecef;
+        }
+
+        .top-districts .no-data {
+            text-align: center;
+            color: #e74c3c;
+            padding: 20px;
+        }
+
+        .loading {
+            text-align: center;
+            color: #34495e;
+            padding: 20px;
+        }
+        .recommendation-container .loading {
+            text-align: center;
+            color: #34495e;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Travel Recommendation System</h1>
+        <div class="tabs">
+            <div class="tab" data-tab="top-districts">Top Districts</div>
+            <div class="tab active" data-tab="travel-recommendation">Travel Recommendation</div>
+        </div>
+
+        <div class="tab-content" id="top-districts">
+            <div class="top-districts">
+                <h2>Top 10 Coolest & Cleanest Districts</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Avg Temp (°C)</th>
+                            <th>Avg PM2.5 (µg/m³)</th>
+                            <th>Latitude</th>
+                            <th>Longitude</th>
+                        </tr>
+                    </thead>
+                    <tbody id="top-districts-body">
+                        <tr><td colspan="5" class="loading">Loading districts...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="tab-content active" id="travel-recommendation">
+            <div class="form-container">
+                <h2>Get Travel Recommendation</h2>
+                <form id="travel-form" method="POST" action="{% url 'travel_recommendation' %}">
+                    {% csrf_token %}
+                    <div class="form-group">
+                        <label for="current_district">Current District:</label>
+                        <select name="current_district" id="current_district" required>
+                            <option value="" selected disabled>Select a district</option>
+                            {% for district in districts %}
+                                <option value="{{ district.name }}">{{ district.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="destination_district">Destination District:</label>
+                        <select name="destination_district" id="destination_district" required>
+                            <option value="" selected disabled>Select a district</option>
+                            {% for district in districts %}
+                                <option value="{{ district.name }}">{{ district.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="travel_date">Travel Date:</label>
+                        <input type="date" name="travel_date" id="travel_date" required 
+                               min="{{ today|date:'Y-m-d' }}" max="{{ seven_days_later|date:'Y-m-d' }}">
+                    </div>
+                    <button type="submit">Get Recommendation</button>
+                </form>
+            </div>
+            <div id="recommendation-container" class="recommendation-container">
+                {% if recommendation %}
+                    <div class="recommendation">
+                        <h2>Travel Recommendation</h2>
+                        <p><strong>Recommendation:</strong> 
+                            <span class="highlight {% if recommendation.recommendation == 'Recommended' %}recommended{% else %}not-recommended{% endif %}">
+                                {{ recommendation.recommendation }}
+                            </span>
+                        </p>
+                        <p><strong>Reason:</strong> {{ recommendation.reason }}</p>
+                        <p><strong>Current District:</strong> Temp: {{ recommendation.current.temp }}°C, PM2.5: {{ recommendation.current.pm25 }} µg/m³</p>
+                        <p><strong>Destination District:</strong> Temp: {{ recommendation.destination.temp }}°C, PM2.5: {{ recommendation.destination.pm25 }} µg/m³</p>
+                    </div>
+                {% endif %}
+                {% if error %}
+                    <div class="error">
+                        <h2>Error</h2>
+                        <p>{{ error }}</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const tabs = document.querySelectorAll('.tab');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            tabs.forEach(tab => {
+                tab.addEventListener('click', function() {
+                    tabs.forEach(t => t.classList.remove('active'));
+                    tabContents.forEach(content => content.classList.remove('active'));
+                    tab.classList.add('active');
+                    document.getElementById(tab.getAttribute('data-tab')).classList.add('active');
+                    if (tab.getAttribute('data-tab') === 'top-districts') {
+                        fetchTopDistricts();
+                    }
+                });
+            });
+
+            function fetchTopDistricts() {
+                const tbody = document.getElementById('top-districts-body');
+                tbody.innerHTML = '<tr><td colspan="5" class="loading">Loading districts...</td></tr>';
+                fetch('{% url "top_districts" %}', {
+                    headers: {'X-Requested-With': 'XMLHttpRequest'}
+                })
+                .then(response => response.json())
+                .then(data => {
+                    tbody.innerHTML = '';
+                    if (!data || data.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="5" class="no-data">No data available</td></tr>';
+                        return;
+                    }
+                    data.forEach(district => {
+                        tbody.innerHTML += `
+                            <tr>
+                                <td>${district.name}</td>
+                                <td>${district.avg_temperature.toFixed(1)}</td>
+                                <td>${district.avg_pm25.toFixed(1)}</td>
+                                <td>${district.latitude.toFixed(4)}</td>
+                                <td>${district.longitude.toFixed(4)}</td>
+                            </tr>
+                        `;
+                    });
+                })
+                .catch(error => {
+                    tbody.innerHTML = `<tr><td colspan="5" class="no-data">Error: ${error.message}</td></tr>`;
+                });
+            }
+
+            const form = document.getElementById('travel-form');
+            form.addEventListener('submit', function(event) {
+                event.preventDefault();
+                const button = this.querySelector('button');
+                button.textContent = 'Processing...';
+                button.disabled = true;
+                const container = document.getElementById('recommendation-container');
+                container.innerHTML = '<div class="loading">Loading recommendation...</div>';
+
+                const formData = new FormData(form);
+                fetch('{% url "travel_recommendation" %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {'X-Requested-With': 'XMLHttpRequest'}
+                })
+                .then(response => response.text())
+                .then(html => {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    container.innerHTML = doc.querySelector('#recommendation-container').innerHTML;
+                    button.textContent = 'Get Recommendation';
+                    button.disabled = false;
+                })
+                .catch(error => {
+                    container.innerHTML = `<div class="error"><h2>Error</h2><p>${error.message}</p></div>`;
+                    button.textContent = 'Get Recommendation';
+                    button.disabled = false;
+                });
+            });
+
+            if (document.querySelector('.tab.active').getAttribute('data-tab') === 'top-districts') {
+                fetchTopDistricts();
+            }
+        });
+    </script>
+</body>
+</html>
